@@ -15,14 +15,15 @@ GENERAL IDEA:
     - Then you see a FOLDER EXPLORER:
           ALK Management
           ALK R&D
-              └─ Researchers
-              └─ Scientists
+              - Researchers
+              - Scientists
     - Each folder has allowed roles. If your role CANNOT enter, you see
       "Access denied" and a button to REQUEST ACCESS.
     - Managers (Team Lead / Regulatory Affairs / Admin) see the requests
       and can APPROVE or DENY them.
-    - Each FILE has its own AUDIT TRAIL (version history): it opens from the
-      explorer, there is no separate section.
+    - Each FILE has its own AUDIT TRAIL (version history) and a STATUS
+      (Approved / Draft): it opens from the explorer, there is no separate section.
+    - Newly uploaded files start as DRAFT (not approved yet).
 
 HOW TO EDIT (for students):
     - USERS         -> users and their role.
@@ -34,7 +35,7 @@ HOW TO EDIT (for students):
 Only Streamlit and pandas are used.
 """
 
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import streamlit as st
 import pandas as pd
@@ -89,10 +90,18 @@ st.markdown(
         .alk-subtitle {{ color:#5A6B7B; font-size:1.05rem; margin-top:0; margin-bottom:0.4rem; }}
 
         /* ---- Cards and notices ---- */
-        .alk-granted    {{ background:#E6F4EA; border-left:6px solid #1E8E3E; padding:1rem; border-radius:8px; }}
         .alk-restricted {{ background:#FCE8E6; border-left:6px solid #C5221F; padding:1rem; border-radius:8px; }}
-        .alk-card       {{ background:#F4F8FC; border:1px solid #D6E4F0; padding:1rem; border-radius:8px; }}
         .alk-user       {{ background:rgba(255,255,255,0.10); border-radius:8px; padding:0.7rem 0.9rem; margin-bottom:0.4rem; }}
+
+        /* Metadata label/value */
+        .alk-label {{ color:#5A6B7B; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.03em; }}
+        .alk-value {{ color:#1F2A37; font-size:0.98rem; font-weight:600; }}
+
+        /* Status badge */
+        .alk-badge        {{ display:inline-block; padding:2px 12px; border-radius:12px;
+                             font-size:0.78rem; font-weight:700; color:#FFFFFF; }}
+        .alk-badge-appr   {{ background:#1E8E3E; }}
+        .alk-badge-draft  {{ background:#B26A00; }}
 
         /* Audit trail event: timeline with side border */
         .alk-event {{ background:#F4F8FC; border-left:4px solid {BRAND}; padding:0.6rem 0.9rem;
@@ -119,13 +128,10 @@ USERS = {
 # Roles allowed to APPROVE / DENY access requests.
 MANAGER_ROLES = {"Team Lead", "Regulatory Affairs", "Admin"}
 
-# Icons per file type (decorative only).
-ICONS = {"XLSX": "📊", "CSV": "📈", "PDF": "📄", "DOCX": "📝", "PNG": "🖼️"}
-
 # Folder structure (tree).
 #   - "_roles"   = roles allowed to ENTER this folder.
 #   - "_files"   = files inside the folder. Each file may have its own
-#                  "history"; if not, a default one is generated.
+#                  "history"; if not, a believable one is generated.
 #   - any other key = subfolder.
 TREE = {
     "ALK Management": {
@@ -147,10 +153,10 @@ TREE = {
                     "File Name": "Experiment_15_Result.xlsx", "Type": "XLSX",
                     "Project": "Aurora", "Department": "Immunology",
                     "Owner": "Maria S.", "Date": "2024-03-12", "Version": "v3",
-                    # Detailed example history for this file.
+                    # Detailed example history for this file. Roles match the USERS table.
                     "history": [
                         {"Action": "Created",  "By": "Maria S.", "Role": "Researcher",         "Version": "v1", "Timestamp": "2024-03-01 09:14"},
-                        {"Action": "Edited",   "By": "Alex R.",  "Role": "Data Manager",       "Version": "v2", "Timestamp": "2024-03-05 14:32"},
+                        {"Action": "Edited",   "By": "Maria S.", "Role": "Researcher",         "Version": "v2", "Timestamp": "2024-03-05 14:32"},
                         {"Action": "Reviewed", "By": "Sarah L.", "Role": "Team Lead",          "Version": "v3", "Timestamp": "2024-03-09 11:05"},
                         {"Action": "Approved", "By": "James K.", "Role": "Regulatory Affairs", "Version": "v3", "Timestamp": "2024-03-12 16:47"},
                     ],
@@ -199,20 +205,10 @@ def get_node(path):
     return node
 
 
-def can_enter(node):
-    """True if the current user can enter this node (by role or granted access)."""
-    if "_roles" not in node:        # the root only requires being logged in
-        return True
-    if current_role() in node["_roles"]:
-        return True
-    key = f"{st.session_state.user}||{'/'.join(st.session_state.path)}"
-    return key in st.session_state.granted
-
-
 def can_access_path(path_list):
-    """True if the current user can access the folder at `path_list` (used by Search)."""
+    """True if the current user can access the folder at `path_list` (by role or granted)."""
     node = get_node(path_list)
-    if "_roles" not in node:
+    if "_roles" not in node:        # the root only requires being logged in
         return True
     if current_role() in node["_roles"]:
         return True
@@ -227,28 +223,60 @@ def folder_files(node, path):
     return base + uploaded
 
 
+def subfolders_of(node):
+    """Names of the subfolders inside a node (keys that are not metadata)."""
+    return [k for k in node.keys() if not k.startswith("_")]
+
+
+def count_items(node, path):
+    """How many items (subfolders + files) a folder contains, for the counter badge."""
+    return len(subfolders_of(node)) + len(folder_files(node, path))
+
+
 def all_files(node=None, path=None):
     """Flatten the whole tree into a list of files, each tagged with its folder path ("_path")."""
     if node is None:
         node, path = TREE, []
     results = [{**f, "_path": path} for f in folder_files(node, path)]
-    for key, value in node.items():
-        if key in ("_files", "_roles"):
-            continue
-        results.extend(all_files(value, path + [key]))  # recurse into subfolders
+    for name in subfolders_of(node):
+        results.extend(all_files(node[name], path + [name]))  # recurse into subfolders
     return results
 
 
 def get_history(f):
-    """Return a file's audit trail. If it has none, generate a default one."""
+    """Return a file's audit trail.
+
+    If the file has an explicit "history" we use it. Otherwise we build a
+    believable one spread over several days: Created (v1) -> [Edited] ->
+    Reviewed -> Approved on the file's date.
+    Uploaded files carry their own short history, so they stay as DRAFT.
+    """
     if "history" in f:
         return f["history"]
-    # Generic history based on the file metadata.
-    return [
-        {"Action": "Created",  "By": f["Owner"], "Role": "Researcher",         "Version": "v1",          "Timestamp": f["Date"] + " 09:00"},
-        {"Action": "Reviewed", "By": "Sarah L.", "Role": "Team Lead",          "Version": f["Version"],  "Timestamp": f["Date"] + " 12:30"},
-        {"Action": "Approved", "By": "James K.", "Role": "Regulatory Affairs", "Version": f["Version"],  "Timestamp": f["Date"] + " 16:15"},
-    ]
+
+    owner, version = f["Owner"], f["Version"]
+    try:
+        approved_day = datetime.strptime(f["Date"], "%Y-%m-%d")
+    except ValueError:
+        approved_day = datetime.now()
+    # Version number, e.g. "v3" -> 3.
+    n = int(version[1:]) if version.startswith("v") and version[1:].isdigit() else 1
+
+    events = [{"Action": "Created", "By": owner, "Role": "Researcher", "Version": "v1",
+               "Timestamp": (approved_day - timedelta(days=11)).strftime("%Y-%m-%d 09:14")}]
+    if n > 1:  # there were edits between v1 and the current version
+        events.append({"Action": "Edited", "By": owner, "Role": "Researcher", "Version": version,
+                       "Timestamp": (approved_day - timedelta(days=7)).strftime("%Y-%m-%d 14:05")})
+    events.append({"Action": "Reviewed", "By": "Sarah L.", "Role": "Team Lead", "Version": version,
+                   "Timestamp": (approved_day - timedelta(days=3)).strftime("%Y-%m-%d 11:30")})
+    events.append({"Action": "Approved", "By": "James K.", "Role": "Regulatory Affairs", "Version": version,
+                   "Timestamp": approved_day.strftime("%Y-%m-%d 16:20")})
+    return events
+
+
+def file_status(f):
+    """A file is Approved if its audit trail contains an Approved event, else Draft."""
+    return "Approved" if any(e["Action"] == "Approved" for e in get_history(f)) else "Draft"
 
 
 # ---------------------------------------------------------------------------
@@ -256,13 +284,13 @@ def get_history(f):
 # ---------------------------------------------------------------------------
 def feedback_box(page_name: str):
     st.markdown("---")
-    with st.expander("💬 Quick feedback (help us improve this prototype)"):
+    with st.expander("Quick feedback (help us improve this prototype)"):
         st.text_area("What was easy to understand?", key=f"easy_{page_name}")
         st.text_area("What was confusing?", key=f"conf_{page_name}")
         st.radio("Would you use this in your daily work?", ["Yes", "Maybe", "No"],
                  horizontal=True, key=f"use_{page_name}")
         if st.button("Submit feedback", key=f"sub_{page_name}"):
-            st.success("✅ Thank you! Your feedback has been recorded (mock-up).")
+            st.success("Thank you! Your feedback has been recorded (mock-up).")
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +301,7 @@ def render_login():
     col = st.columns([1, 2, 1])[1]
     with col:
         with st.container(border=True):
-            st.subheader("🔐 Sign in")
+            st.subheader("Sign in")
             st.caption("Select a test user. The password is fictional.")
             options = {f"{u['name']}  ·  {u['role']}": key for key, u in USERS.items()}
             choice = st.selectbox("User", list(options.keys()))
@@ -285,20 +313,20 @@ def render_login():
                 st.rerun()
 
         st.info(
-            "ℹ️ **Try this:** log in as *Maria S. (Researcher)* and try to open "
-            "**ALK Management** or **Scientists** → you will see 'Access denied' and "
+            "**Tester hint:** log in as *Maria S. (Researcher)* and try to open "
+            "**ALK Management** or **Scientists** — you will see 'Access denied' and "
             "you can request access. Then log in as *Sarah L. (Team Lead)* to approve it."
         )
 
 
 # ---------------------------------------------------------------------------
-# PAGE: FOLDER EXPLORER
+# PAGE: FOLDER EXPLORER (with built-in search)
 # ---------------------------------------------------------------------------
 def page_browse():
-    st.subheader("📁 File explorer")
+    st.subheader("File explorer")
 
     # ---- Search bar (lives inside the explorer) ----
-    query = st.text_input("Search", placeholder="Search experiments, reports, datasets…",
+    query = st.text_input("Search", placeholder="Search by name, owner, project or department…",
                           label_visibility="collapsed")
 
     # Only files in folders the current user can access. Restricted files are
@@ -306,7 +334,7 @@ def page_browse():
     accessible = [f for f in all_files() if can_access_path(f["_path"])]
 
     # Optional filters across multiple categories.
-    with st.expander("🔎 Filters"):
+    with st.expander("Filters"):
         def opts(field):
             return ["All"] + sorted({f.get(field, "—") for f in accessible})
         c1, c2, c3 = st.columns(3)
@@ -315,18 +343,26 @@ def page_browse():
         ftype = c3.selectbox("Type", opts("Type"))
         c4, c5 = st.columns(2)
         owner = c4.selectbox("Owner", opts("Owner"))
-        with c5:
-            use_date = st.checkbox("Filter by date")
-            chosen_date = st.date_input("Date", value=date(2024, 1, 1))
+        status = c5.selectbox("Status", ["All", "Approved", "Draft"])
+        # Date range filter (from / to).
+        use_date = st.checkbox("Filter by date range")
+        d1, d2 = st.columns(2)
+        date_from = d1.date_input("From", value=date(2023, 1, 1), disabled=not use_date)
+        date_to = d2.date_input("To", value=date.today(), disabled=not use_date)
 
     # The search view activates when there is a query or any active filter.
-    filters_on = any(v != "All" for v in (project, department, ftype, owner))
+    filters_on = any(v != "All" for v in (project, department, ftype, owner, status))
     search_active = bool(query) or filters_on or use_date
 
     if search_active:
         res = accessible
         if query:
-            res = [f for f in res if query.lower() in f["File Name"].lower()]
+            q = query.lower()
+            # Flexible search: name, owner, project and department.
+            res = [f for f in res if q in f["File Name"].lower()
+                   or q in str(f.get("Owner", "")).lower()
+                   or q in str(f.get("Project", "")).lower()
+                   or q in str(f.get("Department", "")).lower()]
         if project != "All":
             res = [f for f in res if f.get("Project") == project]
         if department != "All":
@@ -335,8 +371,11 @@ def page_browse():
             res = [f for f in res if f["Type"] == ftype]
         if owner != "All":
             res = [f for f in res if f["Owner"] == owner]
+        if status != "All":
+            res = [f for f in res if file_status(f) == status]
         if use_date:
-            res = [f for f in res if f["Date"] == chosen_date.strftime("%Y-%m-%d")]
+            lo, hi = date_from.strftime("%Y-%m-%d"), date_to.strftime("%Y-%m-%d")
+            res = [f for f in res if lo <= f["Date"] <= hi]
 
         st.markdown("---")
         st.markdown(f"**Search results ({len(res)})**")
@@ -352,11 +391,11 @@ def page_browse():
 
     # ---- Breadcrumb (path with buttons to go back) ----
     crumb_cols = st.columns(len(st.session_state.path) + 1)
-    if crumb_cols[0].button("🏠 Home"):
+    if crumb_cols[0].button("Home"):
         st.session_state.path = []
         st.rerun()
     for i, part in enumerate(st.session_state.path):
-        if crumb_cols[i + 1].button(f"📂 {part}"):
+        if crumb_cols[i + 1].button(part):
             st.session_state.path = st.session_state.path[: i + 1]
             st.rerun()
 
@@ -364,22 +403,24 @@ def page_browse():
     node = get_node(st.session_state.path)
 
     # ---- Access control ----
-    if not can_enter(node):
+    if not can_access_path(st.session_state.path):
         render_access_denied()
         feedback_box("browse")
         return
 
-    # ---- Subfolders ----
-    subfolders = [k for k in node.keys() if not k.startswith("_")]
+    # ---- Subfolders (with a counter of items inside) ----
+    subfolders = subfolders_of(node)
     if subfolders:
         st.markdown("**Folders**")
         cols = st.columns(3)
         for i, folder in enumerate(subfolders):
             child = node[folder]
-            locked = "🔒 " if ("_roles" in child and not _role_ok(child, folder)) else "📁 "
-            if cols[i % 3].button(f"{locked}{folder}", key=f"folder_{folder}",
-                                  use_container_width=True):
-                st.session_state.path = st.session_state.path + [folder]
+            child_path = st.session_state.path + [folder]
+            locked = "" if can_access_path(child_path) else "🔒 "
+            count = count_items(child, child_path)
+            if cols[i % 3].button(f"{locked}{folder}  ·  {count} items",
+                                  key=f"folder_{folder}", use_container_width=True):
+                st.session_state.path = child_path
                 st.rerun()
         st.write("")
 
@@ -401,66 +442,74 @@ def page_browse():
     feedback_box("browse")
 
 
-def _role_ok(child_node, folder_name):
-    """Can the user enter a specific SUBfolder? (used for the lock icon)."""
-    if current_role() in child_node["_roles"]:
-        return True
-    path = "/".join(st.session_state.path + [folder_name])
-    return f"{st.session_state.user}||{path}" in st.session_state.granted
-
-
 def render_file_card(f, location=None):
-    """Show a file as an expander with its metadata and its audit trail.
+    """Show a file as an expander with its status, metadata and audit trail.
 
     `location` (optional) shows the folder path of the file; used by the
     in-explorer search so results from other folders are easy to place.
     """
-    icon = ICONS.get(f["Type"], "📄")
-    with st.expander(f"{icon}  {f['File Name']}   ·   {f['Version']}"):
+    status = file_status(f)
+    # A unique id per file = folder path + file name (avoids widget key clashes
+    # when two files share the same name in different folders).
+    loc = location if location is not None else "/".join(st.session_state.path)
+    uid = f"{loc}/{f['File Name']}"
+
+    with st.expander(f"{f['File Name']}   ·   {f['Version']}   ·   {status}"):
+        # Status badge.
+        badge_class = "alk-badge-appr" if status == "Approved" else "alk-badge-draft"
+        st.markdown(f'<span class="alk-badge {badge_class}">{status}</span>',
+                    unsafe_allow_html=True)
         if location:
-            st.caption(f"📂 Location: {location}")
-        # Metadata in columns.
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Type", f["Type"])
-        c2.metric("Owner", f["Owner"])
-        c3.metric("Date", f["Date"])
-        c4.metric("Version", f["Version"])
+            st.caption(f"Location: {location}")
+
+        # Metadata as a clean label/value grid (no oversized metrics).
+        cols = st.columns(4)
+        for col, label, value in zip(
+            cols,
+            ["Type", "Owner", "Date", "Version"],
+            [f["Type"], f["Owner"], f["Date"], f["Version"]],
+        ):
+            col.markdown(f'<div class="alk-label">{label}</div>'
+                         f'<div class="alk-value">{value}</div>', unsafe_allow_html=True)
         st.caption(f"Project: {f.get('Project', '—')}  ·  Department: {f.get('Department', '—')}")
 
-        st.markdown("##### 🧾 Audit trail")
+        st.markdown("##### Audit trail")
         # View selector (full / approvals only), one key per file.
         view = st.radio("View", ["Full history", "Approvals only"],
-                        horizontal=True, key=f"view_{f['File Name']}",
-                        label_visibility="collapsed")
+                        horizontal=True, key=f"view_{uid}", label_visibility="collapsed")
         history = get_history(f)
         events = [e for e in history if e["Action"] == "Approved"] \
             if view == "Approvals only" else history
 
-        # Timeline.
+        if not events:
+            st.caption("No approval events yet.")
         for e in events:
             extra = " alk-event-approved" if e["Action"] == "Approved" else ""
             st.markdown(
                 f'<div class="alk-event{extra}"><b>{e["Action"]}</b> by '
                 f'<b>{e["By"]}</b> ({e["Role"]}) · version <b>{e["Version"]}</b><br>'
-                f'<span style="color:#5A6B7B;">🕒 {e["Timestamp"]}</span></div>',
+                f'<span style="color:#5A6B7B;">{e["Timestamp"]}</span></div>',
                 unsafe_allow_html=True,
             )
 
-        # Summary: latest approved version (computed automatically).
+        # Summary: latest approved version, or a draft notice.
         approved = [e for e in history if e["Action"] == "Approved"]
         if approved:
             last = approved[-1]
-            st.success(f"✔️ Latest approved version: **{last['Version']}** "
+            st.success(f"Latest approved version: {last['Version']} "
                        f"(by {last['By']}, {last['Timestamp']})")
         else:
-            st.warning("This file does not have an approved version yet.")
+            st.warning("Draft — this file has not been approved yet.")
 
 
 def render_upload():
     """Upload form for the current folder. The saved file really appears in the list
-    (it is stored in the session, so it is visible until the page is refreshed)."""
+    (stored in the session, visible until the page is refreshed) and starts as DRAFT."""
     key = "/".join(st.session_state.path)
-    with st.expander("⬆️ Upload a file to this folder"):
+    node = get_node(st.session_state.path)
+    existing_names = {x["File Name"] for x in folder_files(node, st.session_state.path)}
+
+    with st.expander("Upload a file to this folder"):
         up = st.file_uploader("Choose a file", type=["csv", "xlsx", "pdf", "docx", "png"],
                               key=f"up_{key}")
         c1, c2 = st.columns(2)
@@ -472,21 +521,30 @@ def render_upload():
         if st.button("Save file", key=f"save_{key}", type="primary"):
             if up is None:
                 st.warning("Please choose a file first.")
+            elif up.name in existing_names:
+                # Duplicate warning: a file with this name already exists here.
+                st.error(f"A file named '{up.name}' already exists in this folder. "
+                         "Rename it or upload it as a new version.")
             else:
-                # Derive the type from the file extension (CSV, XLSX, ...).
                 ext = up.name.rsplit(".", 1)[-1].upper() if "." in up.name else "FILE"
+                now = datetime.now()
                 new_file = {
                     "File Name": up.name,
                     "Type": ext,
                     "Project": project or "—",
                     "Department": department or "—",
                     "Owner": owner or current_name(),
-                    "Date": date.today().strftime("%Y-%m-%d"),
+                    "Date": now.strftime("%Y-%m-%d"),
                     "Version": version or "v1",
+                    # New uploads are DRAFT: only an "Uploaded" event, no approval yet.
+                    "history": [{
+                        "Action": "Uploaded", "By": owner or current_name(),
+                        "Role": current_role(), "Version": version or "v1",
+                        "Timestamp": now.strftime("%Y-%m-%d %H:%M"),
+                    }],
                 }
-                # Store it under the current folder path so it shows in the list above.
                 st.session_state.uploads.setdefault(key, []).append(new_file)
-                st.success(f"✅ '{up.name}' saved — it now appears in the list above.")
+                st.success(f"'{up.name}' saved as DRAFT — it now appears in the list above.")
                 st.rerun()
 
 
@@ -496,7 +554,7 @@ def render_access_denied():
     path = "/".join(st.session_state.path)
 
     st.markdown(
-        f'<div class="alk-restricted">🚫 <b>Access denied</b><br>'
+        f'<div class="alk-restricted"><b>Access denied</b><br>'
         f"Your role (<b>{current_role()}</b>) does not have permission to enter "
         f"<b>{folder}</b>.</div>",
         unsafe_allow_html=True,
@@ -511,11 +569,11 @@ def render_access_denied():
               and r["status"] == "Denied"]
 
     if pending:
-        st.info("⏳ You have already requested access. Waiting for a manager's approval.")
+        st.info("You have already requested access. Waiting for a manager's approval.")
     else:
         if denied:
             st.warning("Your previous request was denied. You can request it again.")
-        if st.button("📨 Request access", type="primary"):
+        if st.button("Request access", type="primary"):
             st.session_state.requests.append({
                 "user": st.session_state.user, "user_name": current_name(),
                 "role": current_role(), "folder": path, "status": "Pending",
@@ -523,7 +581,7 @@ def render_access_denied():
             st.rerun()
 
     st.info(
-        "🔐 Access is controlled by **role-based permissions** and **VPN** authentication. "
+        "Access is controlled by **role-based permissions** and **VPN** authentication. "
         "A manager must approve the requests."
     )
 
@@ -532,14 +590,14 @@ def render_access_denied():
 # PAGE: ACCESS REQUESTS
 # ---------------------------------------------------------------------------
 def page_requests():
-    st.subheader("🔔 Access requests")
+    st.subheader("Access requests")
     is_manager = current_role() in MANAGER_ROLES
 
     if is_manager:
         st.write("As a manager, you can approve or deny the requests.")
         pending = [r for r in st.session_state.requests if r["status"] == "Pending"]
         if not pending:
-            st.success("✅ No pending requests.")
+            st.success("No pending requests.")
         for idx, req in enumerate(st.session_state.requests):
             if req["status"] != "Pending":
                 continue
@@ -547,11 +605,11 @@ def page_requests():
                 st.markdown(f'**{req["user_name"]}** ({req["role"]}) requests access to '
                             f'**{req["folder"]}**')
                 c1, c2, _ = st.columns([1, 1, 4])
-                if c1.button("✅ Approve", key=f"appr_{idx}", type="primary"):
+                if c1.button("Approve", key=f"appr_{idx}", type="primary"):
                     req["status"] = "Approved"
                     st.session_state.granted.add(f'{req["user"]}||{req["folder"]}')
                     st.rerun()
-                if c2.button("❌ Deny", key=f"deny_{idx}"):
+                if c2.button("Deny", key=f"deny_{idx}"):
                     req["status"] = "Denied"
                     st.rerun()
         st.markdown("---")
@@ -573,7 +631,7 @@ def page_requests():
 # PAGE: SOP GUIDE
 # ---------------------------------------------------------------------------
 def page_sop():
-    st.subheader("📘 SOP Guide")
+    st.subheader("SOP Guide")
     st.write("Standard Operating Procedure for uploading and naming files.")
 
     st.markdown("##### How to upload a file")
@@ -582,7 +640,7 @@ def page_sop():
         1. Go to the correct folder in the **Explorer**.
         2. Use **Upload a file** (CSV, XLSX, PDF, DOCX or PNG).
         3. Make sure there is no unclassified sensitive data.
-        4. Always add the version.
+        4. Always add the version. New files start as **Draft** until approved.
         """
     )
 
@@ -596,7 +654,7 @@ def page_sop():
         """
     )
 
-    st.markdown("##### ✅ Examples of correct file names")
+    st.markdown("##### Examples of correct file names")
     st.code(
         "Experiment_15_Result_v3.xlsx\n"
         "Aurora_StudyReport_2024-06-01_v1.pdf\n"
@@ -608,7 +666,7 @@ def page_sop():
     st.markdown("---")
     rating = st.slider("How useful was this guidance? (1 = not useful, 5 = very useful)", 1, 5, 3)
     if st.button("Submit rating", type="primary"):
-        st.success(f"⭐ Thanks! You rated the guidance {rating}/5.")
+        st.success(f"Thanks! You rated the guidance {rating}/5.")
 
     feedback_box("sop")
 
@@ -642,27 +700,31 @@ def main():
     # ---- Sidebar ----
     st.sidebar.title("🧭 DataCompas")
     st.sidebar.markdown(
-        f'<div class="alk-user">👤 <b>{current_name()}</b><br>'
+        f'<div class="alk-user"><b>{current_name()}</b><br>'
         f'<span style="opacity:0.85;">{current_role()}</span></div>',
         unsafe_allow_html=True,
     )
 
     # Requests label with a counter for managers.
     pending = len([r for r in st.session_state.requests if r["status"] == "Pending"])
-    req_label = "🔔 Access requests"
+    req_label = "Access requests"
     if current_role() in MANAGER_ROLES and pending:
         req_label += f"  ({pending})"
 
     st.sidebar.markdown("###### Navigation")
-    nav_button("📁 Explorer", "browse")
+    nav_button("Explorer", "browse")
     nav_button(req_label, "requests")
-    nav_button("📘 SOP Guide", "sop")
+    nav_button("SOP Guide", "sop")
 
     st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 Log out", use_container_width=True):
+    if st.sidebar.button("Log out", use_container_width=True):
         st.session_state.user = None
         st.session_state.path = []
         st.rerun()
+
+    # Prototype signature (footer).
+    st.sidebar.markdown("---")
+    st.sidebar.caption("DataCompas · Prototype v1.0\nUsability mock-up — not a real database")
 
     # ---- Routing ----
     if st.session_state.page == "browse":
