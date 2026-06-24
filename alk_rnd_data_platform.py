@@ -36,6 +36,7 @@ Only Streamlit and pandas are used.
 """
 
 from datetime import date, datetime, timedelta
+from io import BytesIO
 
 import streamlit as st
 import pandas as pd
@@ -455,6 +456,63 @@ def page_browse():
     feedback_box("browse")
 
 
+def sample_preview_df(f):
+    """A small, believable table generated for sample (fictional) data files."""
+    return pd.DataFrame({
+        "sample_id": [1, 2, 3, 4, 5],
+        "value": [12.4, 9.8, 15.1, 11.0, 13.7],
+        "unit": ["ng/mL"] * 5,
+        "project": [f.get("Project", "—")] * 5,
+    })
+
+
+def render_preview(f):
+    """Show the actual file content: real bytes for uploads, generated placeholder
+    content for the fictional sample files. Always offers a download button."""
+    st.markdown("##### File")
+    ftype = f["Type"].upper()
+    data = f.get("_bytes")  # real bytes (only for files uploaded this session)
+    base_name = f["File Name"].rsplit(".", 1)[0]
+
+    if data is not None:
+        # ---- A file you really uploaded ----
+        st.download_button("Download original", data=data, file_name=f["File Name"],
+                           key=f"dl_{file_uid(f)}")
+        if ftype == "CSV":
+            try:
+                st.dataframe(pd.read_csv(BytesIO(data)), use_container_width=True)
+            except Exception:
+                st.info("Could not preview this CSV — use Download.")
+        elif ftype in ("XLSX", "XLS"):
+            try:
+                st.dataframe(pd.read_excel(BytesIO(data)), use_container_width=True)
+            except Exception:
+                st.info("Preview not available — use Download.")
+        elif ftype == "PNG":
+            st.image(data)
+        else:  # PDF, DOCX, ...
+            st.info("Preview not available for this file type — use Download.")
+    else:
+        # ---- A fictional sample file: show generated placeholder content ----
+        st.caption("Sample content generated for the prototype (this is a mock file).")
+        if ftype in ("CSV", "XLSX", "XLS"):
+            df = sample_preview_df(f)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.download_button("Download (CSV)", data=df.to_csv(index=False).encode(),
+                               file_name=base_name + ".csv", key=f"dl_{file_uid(f)}")
+        else:  # PDF, DOCX, PNG, ...
+            text = (
+                f"{f['File Name']}\n"
+                f"Project: {f.get('Project', '—')}  |  Department: {f.get('Department', '—')}\n"
+                f"Owner: {f['Owner']}  |  Version: {f['Version']}  |  Date: {f['Date']}\n\n"
+                "This is placeholder content generated for the DataCompas prototype.\n"
+                "In a real platform this would be the actual document."
+            )
+            st.text(text)
+            st.download_button("Download (TXT)", data=text.encode(),
+                               file_name=base_name + ".txt", key=f"dl_{file_uid(f)}")
+
+
 def render_file_card(f, location=None):
     """Show a file as an expander with its status, metadata and audit trail.
 
@@ -484,6 +542,8 @@ def render_file_card(f, location=None):
             col.markdown(f'<div class="alk-label">{label}</div>'
                          f'<div class="alk-value">{value}</div>', unsafe_allow_html=True)
         st.caption(f"Project: {f.get('Project', '—')}  ·  Department: {f.get('Department', '—')}")
+
+        render_preview(f)
 
         st.markdown("##### Audit trail")
         # View selector (full / approvals only), one key per file.
@@ -561,6 +621,8 @@ def render_upload():
                     "Owner": owner or current_name(),
                     "Date": now.strftime("%Y-%m-%d"),
                     "Version": version or "v1",
+                    # Keep the real uploaded bytes so the file can be viewed / downloaded.
+                    "_bytes": up.getvalue(),
                     # New uploads are DRAFT: only an "Uploaded" event, no approval yet.
                     "history": [{
                         "Action": "Uploaded", "By": owner or current_name(),
