@@ -178,6 +178,7 @@ def init_state():
     st.session_state.setdefault("path", [])          # current folder
     st.session_state.setdefault("requests", [])      # access requests
     st.session_state.setdefault("granted", set())    # granted access: "user||path"
+    st.session_state.setdefault("uploads", {})        # files uploaded this session: "path" -> [files]
 
 
 def current_role():
@@ -219,19 +220,22 @@ def can_access_path(path_list):
     return key in st.session_state.granted
 
 
+def folder_files(node, path):
+    """Files of a folder = those defined in the tree + those uploaded during this session."""
+    base = node.get("_files", [])
+    uploaded = st.session_state.uploads.get("/".join(path), [])
+    return base + uploaded
+
+
 def all_files(node=None, path=None):
     """Flatten the whole tree into a list of files, each tagged with its folder path ("_path")."""
     if node is None:
         node, path = TREE, []
-    results = []
+    results = [{**f, "_path": path} for f in folder_files(node, path)]
     for key, value in node.items():
-        if key == "_files":
-            for f in value:
-                results.append({**f, "_path": path})
-        elif key == "_roles":
+        if key in ("_files", "_roles"):
             continue
-        else:  # subfolder
-            results.extend(all_files(value, path + [key]))
+        results.extend(all_files(value, path + [key]))  # recurse into subfolders
     return results
 
 
@@ -380,18 +384,16 @@ def page_browse():
         st.write("")
 
     # ---- Files (each one opens to show its audit trail) ----
-    files = node.get("_files", [])
+    files = folder_files(node, st.session_state.path)
     if files:
         st.markdown("**Files**")
         st.caption("Open a file to see its audit trail.")
         for f in files:
             render_file_card(f)
 
-        with st.expander("⬆️ Upload a file to this folder"):
-            st.file_uploader("Choose a file", type=["csv", "xlsx", "pdf", "docx", "png"],
-                             key=f"up_{'/'.join(st.session_state.path)}")
-            if st.button("Save file", key=f"save_{'/'.join(st.session_state.path)}"):
-                st.success("✅ File uploaded (mock-up).")
+    # ---- Upload (only inside a real folder, not at the root) ----
+    if st.session_state.path:
+        render_upload()
 
     if not subfolders and not files:
         st.info("This folder is empty.")
@@ -452,6 +454,40 @@ def render_file_card(f, location=None):
                        f"(by {last['By']}, {last['Timestamp']})")
         else:
             st.warning("This file does not have an approved version yet.")
+
+
+def render_upload():
+    """Upload form for the current folder. The saved file really appears in the list
+    (it is stored in the session, so it is visible until the page is refreshed)."""
+    key = "/".join(st.session_state.path)
+    with st.expander("⬆️ Upload a file to this folder"):
+        up = st.file_uploader("Choose a file", type=["csv", "xlsx", "pdf", "docx", "png"],
+                              key=f"up_{key}")
+        c1, c2 = st.columns(2)
+        owner = c1.text_input("Owner", value=current_name(), key=f"own_{key}")
+        version = c2.text_input("Version", value="v1", key=f"ver_{key}")
+        project = c1.text_input("Project", key=f"proj_{key}")
+        department = c2.text_input("Department", key=f"dept_{key}")
+
+        if st.button("Save file", key=f"save_{key}", type="primary"):
+            if up is None:
+                st.warning("Please choose a file first.")
+            else:
+                # Derive the type from the file extension (CSV, XLSX, ...).
+                ext = up.name.rsplit(".", 1)[-1].upper() if "." in up.name else "FILE"
+                new_file = {
+                    "File Name": up.name,
+                    "Type": ext,
+                    "Project": project or "—",
+                    "Department": department or "—",
+                    "Owner": owner or current_name(),
+                    "Date": date.today().strftime("%Y-%m-%d"),
+                    "Version": version or "v1",
+                }
+                # Store it under the current folder path so it shows in the list above.
+                st.session_state.uploads.setdefault(key, []).append(new_file)
+                st.success(f"✅ '{up.name}' saved — it now appears in the list above.")
+                st.rerun()
 
 
 def render_access_denied():
