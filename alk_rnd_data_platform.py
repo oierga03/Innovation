@@ -181,7 +181,7 @@ TREE = {
 # ---------------------------------------------------------------------------
 def init_state():
     st.session_state.setdefault("user", None)      # key of the logged-in user
-    st.session_state.setdefault("page", "browse")   # current page
+    st.session_state.setdefault("page", "home")     # current page
     st.session_state.setdefault("path", [])          # current folder
     st.session_state.setdefault("requests", [])      # access requests
     st.session_state.setdefault("granted", set())    # granted access: "user||path"
@@ -323,7 +323,7 @@ def render_login():
             if st.button("Log in", type="primary", use_container_width=True):
                 st.session_state.user = options[choice]
                 st.session_state.path = []
-                st.session_state.page = "browse"
+                st.session_state.page = "home"
                 st.rerun()
 
         st.info(
@@ -331,6 +331,66 @@ def render_login():
             "**ALK Management** or **Scientists** — you will see 'Access denied' and "
             "you can request access. Then log in as *Sarah L. (Team Lead)* to approve it."
         )
+
+
+# ---------------------------------------------------------------------------
+# PAGE: HOME (welcome dashboard)
+# ---------------------------------------------------------------------------
+def page_home():
+    st.subheader(f"Welcome, {current_name()}")
+    st.caption(f"Signed in as {current_role()}")
+
+    # Figures based on what the current user can actually access.
+    accessible = [f for f in all_files() if can_access_path(f["_path"])]
+    approved = [f for f in accessible if file_status(f) == "Approved"]
+    drafts = [f for f in accessible if file_status(f) == "Draft"]
+
+    # Key numbers (st.metric is appropriate here — these are real KPIs).
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Files you can access", len(accessible))
+    c2.metric("Approved", len(approved))
+    c3.metric("Drafts", len(drafts))
+    if current_role() in MANAGER_ROLES:
+        pending_reqs = len([r for r in st.session_state.requests if r["status"] == "Pending"])
+        c4.metric("Pending approvals", len(drafts) + pending_reqs)
+    else:
+        my_pending = len([r for r in st.session_state.requests
+                          if r["user"] == st.session_state.user and r["status"] == "Pending"])
+        c4.metric("My open requests", my_pending)
+
+    # Quick navigation.
+    st.markdown("---")
+    st.markdown("##### Quick actions")
+    q1, q2, q3 = st.columns(3)
+    if q1.button("Browse files", use_container_width=True):
+        st.session_state.page = "browse"
+        st.rerun()
+    if q2.button("Approvals", use_container_width=True):
+        st.session_state.page = "requests"
+        st.rerun()
+    if q3.button("SOP Guide", use_container_width=True):
+        st.session_state.page = "sop"
+        st.rerun()
+
+    # A glance at the most recent files.
+    st.markdown("---")
+    st.markdown("##### Recent files")
+    recent = sorted(accessible, key=lambda x: x["Date"], reverse=True)[:5]
+    if recent:
+        df = pd.DataFrame([{
+            "File Name": f["File Name"],
+            "Type": f["Type"],
+            "Owner": f["Owner"],
+            "Date": f["Date"],
+            "Version": f["Version"],
+            "Status": file_status(f),
+            "Location": "/".join(f["_path"]) or "/",
+        } for f in recent])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No files available yet.")
+
+    feedback_box("home")
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +885,7 @@ def main():
             req_label += f"  ({total})"
 
     st.sidebar.markdown("###### Navigation")
+    nav_button("Home", "home")
     nav_button("Explorer", "browse")
     nav_button(req_label, "requests")
     nav_button("SOP Guide", "sop")
@@ -840,7 +901,9 @@ def main():
     st.sidebar.caption("DataCompas · Prototype v1.0\nUsability mock-up — not a real database")
 
     # ---- Routing ----
-    if st.session_state.page == "browse":
+    if st.session_state.page == "home":
+        page_home()
+    elif st.session_state.page == "browse":
         page_browse()
     elif st.session_state.page == "requests":
         page_requests()
