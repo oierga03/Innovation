@@ -615,14 +615,36 @@ def render_access_denied():
 # PAGE: ACCESS REQUESTS
 # ---------------------------------------------------------------------------
 def page_requests():
-    st.subheader("Access requests")
+    st.subheader("Approvals")
     is_manager = current_role() in MANAGER_ROLES
 
     if is_manager:
-        st.write("As a manager, you can approve or deny the requests.")
+        # ---- Pending file approvals (every Draft file the manager can access) ----
+        st.markdown("##### Pending file approvals")
+        drafts = [f for f in all_files()
+                  if can_access_path(f["_path"]) and file_status(f) == "Draft"]
+        if not drafts:
+            st.success("No files awaiting approval.")
+        for f in drafts:
+            with st.container(border=True):
+                location = "/".join(f["_path"]) or "/"
+                st.markdown(f'**{f["File Name"]}**  ·  {f["Version"]}  —  _{location}_')
+                st.caption(f"Owner: {f['Owner']}  ·  Project: {f.get('Project', '—')}  ·  "
+                           f"Department: {f.get('Department', '—')}")
+                if st.button("Approve", key=f"apprfile_{file_uid(f)}", type="primary"):
+                    st.session_state.approvals[file_uid(f)] = {
+                        "Action": "Approved", "By": current_name(),
+                        "Role": current_role(), "Version": f["Version"],
+                        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    }
+                    st.rerun()
+        st.markdown("---")
+
+        # ---- Folder access requests ----
+        st.markdown("##### Access requests")
         pending = [r for r in st.session_state.requests if r["status"] == "Pending"]
         if not pending:
-            st.success("No pending requests.")
+            st.success("No pending access requests.")
         for idx, req in enumerate(st.session_state.requests):
             if req["status"] != "Pending":
                 continue
@@ -639,7 +661,7 @@ def page_requests():
                     st.rerun()
         st.markdown("---")
 
-    st.markdown("##### My requests")
+    st.markdown("##### My access requests")
     mine = [r for r in st.session_state.requests if r["user"] == st.session_state.user]
     if mine:
         st.dataframe(
@@ -730,11 +752,15 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Requests label with a counter for managers.
-    pending = len([r for r in st.session_state.requests if r["status"] == "Pending"])
-    req_label = "Access requests"
-    if current_role() in MANAGER_ROLES and pending:
-        req_label += f"  ({pending})"
+    # Approvals label with a counter for managers (draft files + access requests).
+    req_label = "Approvals"
+    if current_role() in MANAGER_ROLES:
+        pending_reqs = len([r for r in st.session_state.requests if r["status"] == "Pending"])
+        pending_files = len([f for f in all_files()
+                             if can_access_path(f["_path"]) and file_status(f) == "Draft"])
+        total = pending_reqs + pending_files
+        if total:
+            req_label += f"  ({total})"
 
     st.sidebar.markdown("###### Navigation")
     nav_button("Explorer", "browse")
