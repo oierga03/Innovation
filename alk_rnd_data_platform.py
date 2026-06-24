@@ -185,6 +185,7 @@ def init_state():
     st.session_state.setdefault("requests", [])      # access requests
     st.session_state.setdefault("granted", set())    # granted access: "user||path"
     st.session_state.setdefault("uploads", {})        # files uploaded this session: "path" -> [files]
+    st.session_state.setdefault("approvals", {})      # approvals this session: file uid -> approval event
 
 
 def current_role():
@@ -217,10 +218,16 @@ def can_access_path(path_list):
 
 
 def folder_files(node, path):
-    """Files of a folder = those defined in the tree + those uploaded during this session."""
+    """Files of a folder = tree files + files uploaded this session.
+    Each is returned as a copy tagged with its folder path ("_path")."""
     base = node.get("_files", [])
     uploaded = st.session_state.uploads.get("/".join(path), [])
-    return base + uploaded
+    return [{**f, "_path": path} for f in base + uploaded]
+
+
+def file_uid(f):
+    """Unique id for a file = folder path + name (used for approvals and widget keys)."""
+    return "/".join(f.get("_path", [])) + "||" + f["File Name"]
 
 
 def subfolders_of(node):
@@ -237,7 +244,7 @@ def all_files(node=None, path=None):
     """Flatten the whole tree into a list of files, each tagged with its folder path ("_path")."""
     if node is None:
         node, path = TREE, []
-    results = [{**f, "_path": path} for f in folder_files(node, path)]
+    results = list(folder_files(node, path))  # already tagged with "_path"
     for name in subfolders_of(node):
         results.extend(all_files(node[name], path + [name]))  # recurse into subfolders
     return results
@@ -249,29 +256,35 @@ def get_history(f):
     If the file has an explicit "history" we use it. Otherwise we build a
     believable one spread over several days: Created (v1) -> [Edited] ->
     Reviewed -> Approved on the file's date.
-    Uploaded files carry their own short history, so they stay as DRAFT.
+    Uploaded files carry their own short history, so they stay as DRAFT
+    until a manager approves them (that approval is stored in session state).
     """
     if "history" in f:
-        return f["history"]
+        history = list(f["history"])
+    else:
+        owner, version = f["Owner"], f["Version"]
+        try:
+            approved_day = datetime.strptime(f["Date"], "%Y-%m-%d")
+        except ValueError:
+            approved_day = datetime.now()
+        # Version number, e.g. "v3" -> 3.
+        n = int(version[1:]) if version.startswith("v") and version[1:].isdigit() else 1
 
-    owner, version = f["Owner"], f["Version"]
-    try:
-        approved_day = datetime.strptime(f["Date"], "%Y-%m-%d")
-    except ValueError:
-        approved_day = datetime.now()
-    # Version number, e.g. "v3" -> 3.
-    n = int(version[1:]) if version.startswith("v") and version[1:].isdigit() else 1
+        history = [{"Action": "Created", "By": owner, "Role": "Researcher", "Version": "v1",
+                    "Timestamp": (approved_day - timedelta(days=11)).strftime("%Y-%m-%d 09:14")}]
+        if n > 1:  # there were edits between v1 and the current version
+            history.append({"Action": "Edited", "By": owner, "Role": "Researcher", "Version": version,
+                            "Timestamp": (approved_day - timedelta(days=7)).strftime("%Y-%m-%d 14:05")})
+        history.append({"Action": "Reviewed", "By": "Sarah L.", "Role": "Team Lead", "Version": version,
+                        "Timestamp": (approved_day - timedelta(days=3)).strftime("%Y-%m-%d 11:30")})
+        history.append({"Action": "Approved", "By": "James K.", "Role": "Regulatory Affairs", "Version": version,
+                        "Timestamp": approved_day.strftime("%Y-%m-%d 16:20")})
 
-    events = [{"Action": "Created", "By": owner, "Role": "Researcher", "Version": "v1",
-               "Timestamp": (approved_day - timedelta(days=11)).strftime("%Y-%m-%d 09:14")}]
-    if n > 1:  # there were edits between v1 and the current version
-        events.append({"Action": "Edited", "By": owner, "Role": "Researcher", "Version": version,
-                       "Timestamp": (approved_day - timedelta(days=7)).strftime("%Y-%m-%d 14:05")})
-    events.append({"Action": "Reviewed", "By": "Sarah L.", "Role": "Team Lead", "Version": version,
-                   "Timestamp": (approved_day - timedelta(days=3)).strftime("%Y-%m-%d 11:30")})
-    events.append({"Action": "Approved", "By": "James K.", "Role": "Regulatory Affairs", "Version": version,
-                   "Timestamp": approved_day.strftime("%Y-%m-%d 16:20")})
-    return events
+    # Append a manager approval made during this session (e.g. for an upload).
+    approval = st.session_state.approvals.get(file_uid(f))
+    if approval and not any(e["Action"] == "Approved" for e in history):
+        history = history + [approval]
+    return history
 
 
 def file_status(f):
@@ -451,8 +464,7 @@ def render_file_card(f, location=None):
     status = file_status(f)
     # A unique id per file = folder path + file name (avoids widget key clashes
     # when two files share the same name in different folders).
-    loc = location if location is not None else "/".join(st.session_state.path)
-    uid = f"{loc}/{f['File Name']}"
+    uid = file_uid(f)
 
     with st.expander(f"{f['File Name']}   ·   {f['Version']}   ·   {status}"):
         # Status badge.
@@ -492,7 +504,7 @@ def render_file_card(f, location=None):
                 unsafe_allow_html=True,
             )
 
-        # Summary: latest approved version, or a draft notice.
+        # Summary: latest approved version, or a draft notice + approval action.
         approved = [e for e in history if e["Action"] == "Approved"]
         if approved:
             last = approved[-1]
@@ -500,6 +512,19 @@ def render_file_card(f, location=None):
                        f"(by {last['By']}, {last['Timestamp']})")
         else:
             st.warning("Draft — this file has not been approved yet.")
+            # Managers can approve the draft here; it then becomes Approved
+            # and the approval is recorded in the audit trail above.
+            if current_role() in MANAGER_ROLES:
+                if st.button("Approve this version", key=f"approve_{uid}", type="primary"):
+                    st.session_state.approvals[uid] = {
+                        "Action": "Approved", "By": current_name(),
+                        "Role": current_role(), "Version": f["Version"],
+                        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    }
+                    st.rerun()
+            else:
+                st.caption("Only a manager (Team Lead, Regulatory Affairs or Admin) "
+                           "can approve this file.")
 
 
 def render_upload():
