@@ -1,4 +1,4 @@
-# ALK R&D Data Platform
+# DataCompas
 
 A clickable **Streamlit prototype** of a pharmaceutical R&D data-management platform,
 built for usability testing. It is a mock-up only — it does **not** use a real database

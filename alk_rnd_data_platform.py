@@ -1,5 +1,5 @@
 """
-ALK R&D Data Platform - Streamlit Prototype
+DataCompas - Streamlit Prototype
 ============================================
 
 Clickable MOCK-UP for usability testing. It does NOT use a real database:
@@ -43,8 +43,8 @@ import pandas as pd
 # PAGE CONFIG + STYLES
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="ALK R&D Data Platform",
-    page_icon="🧬",
+    page_title="DataCompas",
+    page_icon="🧭",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -629,7 +629,7 @@ def main():
     init_state()
 
     # Header (always visible).
-    st.markdown('<p class="alk-title">ALK R&D Data Platform</p>', unsafe_allow_html=True)
+    st.markdown('<p class="alk-title">DataCompas</p>', unsafe_allow_html=True)
     st.markdown('<p class="alk-subtitle">Find, organise and trust R&D data</p>',
                 unsafe_allow_html=True)
     st.markdown("---")
@@ -640,7 +640,7 @@ def main():
         return
 
     # ---- Sidebar ----
-    st.sidebar.title("🧬 ALK Platform")
+    st.sidebar.title("🧭 DataCompas")
     st.sidebar.markdown(
         f'<div class="alk-user">👤 <b>{current_name()}</b><br>'
         f'<span style="opacity:0.85;">{current_role()}</span></div>',
