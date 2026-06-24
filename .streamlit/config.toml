@@ -1,0 +1,12 @@
+# App theme (professional look, corporate blue).
+# Streamlit reads this file automatically when the app runs from this folder.
+[theme]
+primaryColor = "#0B5FA5"            # brand blue (primary buttons, accents)
+backgroundColor = "#FFFFFF"          # main white background
+secondaryBackgroundColor = "#EEF4FA" # card / expander background (very light blue)
+textColor = "#1F2A37"                # main text (dark blue-grey)
+font = "sans serif"
+
+[client]
+# Hide the developer menu so the demo looks cleaner.
+toolbarMode = "minimal"
